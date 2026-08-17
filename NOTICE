@@ -1,0 +1,25 @@
+3d-model-data-reader
+Copyright (C) 2026 MlsMoon
+
+This program is free software; you can redistribute it and/or modify
+it under the terms of the GNU General Public License as published by
+the Free Software Foundation; either version 2 of the License, or
+(at your option) any later version.
+
+Third-party files retained with original SPDX headers:
+
+  scripts/encode_bin.py
+    SPDX-FileCopyrightText: 2013 Campbell Barton
+    SPDX-License-Identifier: GPL-2.0-or-later
+    Source: Blender io_scene_fbx
+
+  scripts/data_types.py
+    SPDX-FileCopyrightText: 2006-2012 assimp team
+    SPDX-FileCopyrightText: 2013 Blender Foundation
+    SPDX-License-Identifier: GPL-2.0-or-later
+
+  scripts/fbx_utils_threading.py
+    SPDX-FileCopyrightText: 2023 Blender Foundation
+    SPDX-License-Identifier: GPL-2.0-or-later
+
+See LICENSE for the full GPL-2.0 terms.

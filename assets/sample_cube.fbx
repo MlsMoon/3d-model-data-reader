@@ -1,0 +1,58 @@
+; sample_cube.fbx — 解析器测试夹具（ASCII FBX 7.3）
+; 覆盖：Null 根 / Mesh Model / Skeleton+LimbNode 骨架链 / Geometry / Material / BindPose / Connections
+; FBX 7.3.0 project file
+FBXHeaderExtension:  {
+    FBXHeaderVersion: 1003
+    FBXVersion: 7300
+    Creator: "sample_cube generator"
+}
+GlobalSettings:  {
+    Version: 1000
+    Properties70:  {
+        P: "UpAxis", "int", "Integer", "",1
+        P: "UpAxisSign", "int", "Integer", "",1
+        P: "FrontAxis", "int", "Integer", "",2
+        P: "UnitScaleFactor", "double", "Number", "",1
+    }
+}
+Definitions:  {
+    Version: 100
+    Count: 5
+    ObjectType: "Model" { Count: 4 }
+    ObjectType: "Geometry" { Count: 1 }
+}
+Objects:  {
+    Model: 101, "Model::Root", "Null" { Version: 232 }
+    Model: 102, "Model::BoneA", "Skeleton" { Version: 232 }
+    Model: 103, "Model::BoneB", "LimbNode" { Version: 232 }
+    Model: 104, "Model::Cube", "Mesh" { Version: 232 }
+    Geometry: 201, "Geometry::CubeGeo", "Mesh" {
+        GeometryVersion: 124
+        Vertices: *24 { a: 0,0,0, 1,0,0, 1,1,0, 0,1,0, 0,0,1, 1,0,1, 1,1,1, 0,1,1 }
+        PolygonVertexIndex: *24 { a: 0,1,2,-4, 4,5,6,-8, 0,3,7,-5, 1,0,4,-6, 2,1,5,-7, 3,2,6,-8 }
+        Layer: 0 {
+            Version: 100
+        }
+    }
+    Material: 301, "Material::CubeMat", "" { Version: 102 }
+    Pose: 401, "Pose::BindPose", "BindPose" {
+        Type: "BindPose"
+        PoseNode: 0 {
+            Node: 102
+            Matrix: *16 { a: 1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1 }
+        }
+        PoseNode: 1 {
+            Node: 103
+            Matrix: *16 { a: 1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1 }
+        }
+    }
+}
+Connections:  {
+    C: "OO", 101, 0
+    C: "OO", 102, 101
+    C: "OO", 103, 102
+    C: "OO", 104, 101
+    C: "OP", 201, 104, "Mesh"
+    C: "OP", 301, 104, "Material"
+    C: "OP", 401, 104, "Pose"
+}
