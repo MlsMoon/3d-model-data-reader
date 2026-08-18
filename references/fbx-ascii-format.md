@@ -176,3 +176,18 @@ Connections:  {
 ```
 
 > 注意 `PolygonVertexIndex` 里每组 3 个 + 1 个负值 = 1 个三角形；上例 24 个元素 = 6 个三角形面（立方体 6 面，每面 1 个三角形 —— 简化版，真实立方体每面 2 个三角形）。
+
+## 8. FBX 6.1 ASCII（与 7.x 的差异）
+
+6.1 仍是合法 ASCII FBX，但对象模型更老。读取器必须单独兼容，不能按 7.x 假设。
+
+| 7.x | 6.1 |
+|---|---|
+| `Model: 123, "Model::Name", "LimbNode"` | `Model: "Model::Name", "Limb"`（无整数 ID） |
+| 独立 `Geometry` 节点 | 网格写在 `Model ..., "Mesh"` 上：`Vertices` / `PolygonVertexIndex` 是 Model 子节点 |
+| `Vertices: *N { a: ... }` | `Vertices: 1,2,3,` 后接无 `Key:` 的折行数字 |
+| `C: "OO", 子ID, 父ID` | `Connect: "OO", "Model::Child", "Model::Scene"` |
+| `Properties70` / `P:` | `Properties60` / `Property:` |
+| 骨骼子类型 `LimbNode` | 子类型 `Limb`，另有 `TypeFlags: "Skeleton"` |
+
+`LayerElementNormal: 0 {` 的 `0` 是层序号。法线/UV 数组在子节点 `Normals` / `UV`，映射类型在 `MappingInformationType`。

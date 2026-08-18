@@ -184,6 +184,10 @@ def parse_ascii(path: str | Path) -> FbxNode:
             continue
         m = _NODE_RE.match(line)
         if not m:
+            # FBX 6.1：Vertices / PVI / Normals / UV 常折行，续行无 `Key:`
+            if stack[-1].children and _looks_like_values(line):
+                extra = _parse_values_block(line)
+                stack[-1].children[-1].properties.extend(extra)
             continue
         key, rest = m.group(1).strip(), (m.group(2) or "").strip()
         if rest.startswith("*") and rest.count("{") > rest.count("}"):
@@ -202,3 +206,15 @@ def parse_ascii(path: str | Path) -> FbxNode:
 
 
 _NODE_RE = re.compile(r"^([^:{}]+):\s*(.*)$")
+
+
+def _looks_like_values(line: str) -> bool:
+    s = line.lstrip()
+    return bool(s) and (s[0] in '+-."\'' or s[0].isdigit())
+
+
+def read_ascii_version(path: str | Path) -> int | None:
+    """从文件头附近读 FBXVersion；找不到返回 None。"""
+    text = Path(path).read_text(encoding="utf-8", errors="replace")[:4096]
+    m = re.search(r"FBXVersion:\s*(\d+)", text)
+    return int(m.group(1)) if m else None

@@ -1,7 +1,10 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""FBX 语义层：对象 / 连接 / 几何 / 骨架（与 ASCII/二进制无关）。"""
-from fbx_types import FbxNode, fbx_display_name
+"""FBX 语义层：对象 / 连接 / 骨架（与 ASCII/二进制无关）。"""
+from fbx_geom import geometry_stats
+from fbx_types import FbxNode, object_display_name
+
+ObjKey = int | str
 
 def _find_all(node: FbxNode, name: str, out: list[FbxNode]) -> None:
     if node.name == name:
@@ -19,7 +22,7 @@ def _objects_node(root: FbxNode) -> FbxNode | None:
 
 def _obj_id(node: FbxNode) -> int | None:
     """对象 ID：二进制 O 节点属性为 [类型, 名称, 标志...]（取最后一个 int）；
-    ASCII 节点（Model:/Geometry: 等）ID 是第一个属性。"""
+    ASCII 7.x 节点（Model:/Geometry: 等）ID 是第一个属性。"""
     if node.name == "O":
         for prop in reversed(node.properties):
             if isinstance(prop, int):
@@ -31,34 +34,43 @@ def _obj_id(node: FbxNode) -> int | None:
     return None
 
 
-def collect_objects(root: FbxNode) -> dict[int, FbxNode]:
-    """Objects 分区下的对象节点按 ID 索引。
-    兼容二进制（节点名 O）与 ASCII（节点名为 Model/Geometry/...）。"""
-    objs: dict[int, FbxNode] = {}
+def _obj_key(node: FbxNode) -> ObjKey | None:
+    """7.x 用整数 ID；FBX 6.1 无 ID，用第一段字符串（如 Model::DummyMesh）。"""
+    oid = _obj_id(node)
+    if oid is not None:
+        return oid
+    if node.properties and isinstance(node.properties[0], str):
+        return node.properties[0]
+    return None
+
+
+def collect_objects(root: FbxNode) -> dict[ObjKey, FbxNode]:
+    """Objects 分区下的对象按 ID 或 6.1 名称索引。"""
+    objs: dict[ObjKey, FbxNode] = {}
     objects = _objects_node(root)
     if objects is None:
         return objs
     for child in objects.children:
-        oid = _obj_id(child)
-        if oid is not None:
-            objs[oid] = child
+        key = _obj_key(child)
+        if key is not None:
+            objs[key] = child
     return objs
 
 
-def build_connections(root: FbxNode) -> list[tuple[str, int, int, str]]:
-    """Connections 分区的 C 节点 -> [(kind, child, parent, prop)]。"""
-    conns: list[tuple[str, int, int, str]] = []
+def build_connections(root: FbxNode) -> list[tuple[str, ObjKey, ObjKey, str]]:
+    """Connections：7.x 的 C + 整数端点；6.1 的 Connect + 名称端点。"""
+    conns: list[tuple[str, ObjKey, ObjKey, str]] = []
     for c in root.children:
         if c.name != "Connections":
             continue
         for cc in c.children:
-            if cc.name != "C" or len(cc.properties) < 3:
+            if cc.name not in ("C", "Connect") or len(cc.properties) < 3:
                 continue
             kind = cc.properties[0]
             child, parent = cc.properties[1], cc.properties[2]
             prop = cc.properties[3] if len(cc.properties) > 3 and \
                 isinstance(cc.properties[3], str) else ""
-            conns.append((kind, int(child), int(parent), prop))
+            conns.append((kind, child, parent, prop))
     return conns
 
 
@@ -73,50 +85,22 @@ def build_model_tree(root: FbxNode) -> list[FbxNode]:
     return roots
 
 
-def geometry_stats(root: FbxNode) -> dict:
-    """汇总 Geometry 的顶点/面统计与整体包围盒。"""
-    geoms: list[FbxNode] = []
-    _find_all(root, "Geometry", geoms)
-    total_verts, total_faces = 0, 0
-    bounds = []
-    for g in geoms:
-        for c in g.children:
-            if c.name == "Vertices" and c.properties:
-                v = c.properties[0]
-                if isinstance(v, list) and v:
-                    total_verts += len(v) // 3
-                    for i in range(0, len(v) - 2, 3):
-                        bounds.append(tuple(v[i: i + 3]))
-        pvi = None
-        for c in g.children:
-            if c.name == "PolygonVertexIndex" and c.properties and \
-                    isinstance(c.properties[0], list):
-                pvi = c.properties[0]
-        if pvi:
-            total_faces += sum(1 for x in pvi if x < 0)
-    bmin, bmax = (None, None)
-    if bounds:
-        bmin = tuple(min(b[i] for b in bounds) for i in range(3))
-        bmax = tuple(max(b[i] for b in bounds) for i in range(3))
-    return {"geometry_count": len(geoms), "vertices": total_verts,
-            "faces": total_faces, "bounds_min": bmin, "bounds_max": bmax}
-
-
 def _bone_hierarchy(root: FbxNode) -> tuple[
-        dict[int, FbxNode], dict[int, int], dict[int, list[int]], dict[int, bool]]:
+        dict[ObjKey, FbxNode], dict[ObjKey, ObjKey],
+        dict[ObjKey, list[ObjKey]], dict[ObjKey, bool]]:
     """Model-only 骨骼父子图。OO(Bone→Deformer) 不参与层级。"""
     objs = collect_objects(root)
-    parent_of: dict[int, int] = {}
-    children_of: dict[int, list[int]] = {}
+    parent_of: dict[ObjKey, ObjKey] = {}
+    children_of: dict[ObjKey, list[ObjKey]] = {}
     for kind, child, parent, _ in build_connections(root):
         if kind != "OO" or child not in objs or parent not in objs:
             continue
-        if objs[child].name != "Model" or objs[parent].name != "Model":
+        if _obj_kind(objs[child]) != "Model" or _obj_kind(objs[parent]) != "Model":
             continue
         parent_of[child] = parent
         children_of.setdefault(parent, []).append(child)
 
-    bone_tokens = {"Skeleton", "LimbNode", "Root", "RootNode"}
+    bone_tokens = {"Skeleton", "LimbNode", "Limb", "Root", "RootNode"}
 
     def _attr_is_bone(node: FbxNode) -> bool:
         for c in node.children:
@@ -128,28 +112,27 @@ def _bone_hierarchy(root: FbxNode) -> tuple[
 
     attr_bone_ids = {
         oid for oid, node in objs.items()
-        if node.name == "NodeAttribute" and _attr_is_bone(node)
+        if _obj_kind(node) == "NodeAttribute" and _attr_is_bone(node)
     }
-    model_linked_bone_attr: set[int] = set()
+    model_linked_bone_attr: set[ObjKey] = set()
     for kind, child, parent, _ in build_connections(root):
         if kind != "OO":
             continue
-        if child in attr_bone_ids and parent in objs and objs[parent].name == "Model":
+        if child in attr_bone_ids and parent in objs and _obj_kind(objs[parent]) == "Model":
             model_linked_bone_attr.add(parent)
-        if parent in attr_bone_ids and child in objs and objs[child].name == "Model":
+        if parent in attr_bone_ids and child in objs and _obj_kind(objs[child]) == "Model":
             model_linked_bone_attr.add(child)
 
-    is_bone: dict[int, bool] = {}
+    is_bone: dict[ObjKey, bool] = {}
     for oid, node in objs.items():
-        if node.name != "Model":
+        if _obj_kind(node) != "Model":
             is_bone[oid] = False
             continue
-        by_prop = any(isinstance(prop, str) and prop in bone_tokens for prop in node.properties)
-        is_bone[oid] = by_prop or oid in model_linked_bone_attr
+        is_bone[oid] = _attr_is_bone(node) or oid in model_linked_bone_attr
     return objs, parent_of, children_of, is_bone
 
 
-def _bone_roots(parent_of: dict[int, int], is_bone: dict[int, bool]) -> list[int]:
+def _bone_roots(parent_of: dict[ObjKey, ObjKey], is_bone: dict[ObjKey, bool]) -> list[ObjKey]:
     return [
         oid for oid, bone in is_bone.items()
         if bone and (oid not in parent_of or not is_bone.get(parent_of.get(oid)))
@@ -180,18 +163,20 @@ def print_skeleton_tree(root: FbxNode) -> int:
     if bone_count == 0:
         model_types: dict[str, int] = {}
         for n in objs.values():
-            if n.name == "Model" and len(n.properties) >= 3 and isinstance(n.properties[2], str):
-                model_types[n.properties[2]] = model_types.get(n.properties[2], 0) + 1
-        print("未找到骨架（Model 中无 LimbNode/Skeleton/Root）。")
+            if _obj_kind(n) != "Model":
+                continue
+            strs = [p for p in n.properties if isinstance(p, str)]
+            subtype = strs[-1] if strs else "?"
+            model_types[subtype] = model_types.get(subtype, 0) + 1
+        print("未找到骨架（Model 中无 LimbNode/Limb/Skeleton/Root）。")
         if model_types:
             print("Model 类型统计: " + ", ".join(f"{k}×{v}" for k, v in sorted(model_types.items())))
         return 0
 
-    def _name(oid: int) -> str:
-        n = objs[oid]
-        return fbx_display_name(n.properties[1] if len(n.properties) > 1 else n.name)
+    def _name(oid: ObjKey) -> str:
+        return object_display_name(objs[oid])
 
-    def _walk(oid: int, depth: int, seen: set[int]) -> None:
+    def _walk(oid: ObjKey, depth: int, seen: set) -> None:
         if oid in seen:
             return
         seen.add(oid)
@@ -201,27 +186,43 @@ def print_skeleton_tree(root: FbxNode) -> int:
                 _walk(child, depth + 1, seen)
 
     print(f"骨骼: {bone_count}  根: {len(roots)}")
-    seen: set[int] = set()
+    seen: set = set()
     for rid in roots:
         _walk(rid, 0, seen)
     return bone_count
 
 
-def global_settings(root: FbxNode) -> dict:
-    """GlobalSettings 中单位与轴信息。"""
-    out: dict = {}
+def header_version(root: FbxNode) -> int | None:
     for c in root.children:
-        if c.name != "GlobalSettings":
+        if c.name != "FBXHeaderExtension":
             continue
-        for p in c.children:
-            if p.name != "Properties70":
+        for cc in c.children:
+            if cc.name == "FBXVersion" and cc.properties:
+                try:
+                    return int(cc.properties[0])
+                except (TypeError, ValueError):
+                    return None
+    return None
+
+
+def global_settings(root: FbxNode) -> dict:
+    """GlobalSettings 单位与轴。7.x 用 Properties70/P；6.1 用 Properties60/Property。"""
+    out: dict = {}
+    nodes: list[FbxNode] = []
+    _find_all(root, "GlobalSettings", nodes)
+    keys = ("UnitScaleFactor", "UpAxis", "UpAxisSign", "FrontAxis")
+    for node in nodes:
+        for p in node.children:
+            if p.name not in ("Properties70", "Properties60"):
                 continue
             for entry in p.children:
-                if entry.name != "P" or not entry.properties:
+                if entry.name not in ("P", "Property") or not entry.properties:
                     continue
                 key = entry.properties[0]
-                if key in ("UnitScaleFactor", "UpAxis", "UpAxisSign", "FrontAxis"):
-                    vals = [x for x in entry.properties[4:] if not isinstance(x, str)]
+                if key not in keys:
+                    continue
+                vals = [x for x in entry.properties[1:] if isinstance(x, (int, float))]
+                if vals:
                     out[key] = vals[0] if len(vals) == 1 else vals
     return out
 
@@ -253,4 +254,9 @@ def summarize(root: FbxNode) -> dict:
     for node in objs.values():
         kinds[_obj_kind(node)] = kinds.get(_obj_kind(node), 0) + 1
     geo = geometry_stats(root)
-    return {"objects": kinds, **geo, "settings": global_settings(root)}
+    return {
+        "objects": kinds,
+        **geo,
+        "settings": global_settings(root),
+        "fbx_version": header_version(root),
+    }

@@ -14,8 +14,9 @@ import json
 import sys
 from pathlib import Path
 
-from fbx_ascii import parse_ascii
+from fbx_ascii import parse_ascii, read_ascii_version
 from fbx_binary import parse_binary, probe_layout, read_version
+from fbx_geom import find_object, print_geometry
 from fbx_scene import (  # noqa: F401  # re-export for extract_submeshes
     build_connections,
     collect_objects,
@@ -25,7 +26,7 @@ from fbx_scene import (  # noqa: F401  # re-export for extract_submeshes
     summarize,
     _obj_kind,
 )
-from fbx_types import FBX_MAGIC, FbxNode, fbx_display_name
+from fbx_types import FBX_MAGIC, FbxNode, object_display_name
 
 def detect_format(path: str | Path) -> str:
     """返回 'binary' | 'ascii' | 'unknown'。ASCII 用 FBX 关键字启发式判定。"""
@@ -46,7 +47,7 @@ def main(argv: list[str]) -> int:
     ap.add_argument("--json", action="store_true", help="输出结构化 JSON")
     ap.add_argument("--tree", type=int, nargs="?", const=8, metavar="N", help="打印节点树（前 N 层）")
     ap.add_argument("--objects", action="store_true", help="列出全部对象 ID/类型/名称")
-    ap.add_argument("--geometry", type=int, metavar="ID", help="打印指定 Geometry 摘要")
+    ap.add_argument("--geometry", metavar="ID", help="打印指定 Geometry（整数 ID 或名称）")
     ap.add_argument("--skeleton", action="store_true", help="打印骨架链")
     ap.add_argument("--info", action="store_true", help="仅打印头部信息（格式/版本）")
     args = ap.parse_args(argv)
@@ -56,8 +57,10 @@ def main(argv: list[str]) -> int:
         fmt = detect_format(path)
         version = read_version(path)
         if args.info:
+            ascii_ver = read_ascii_version(path) if fmt == "ascii" else None
+            shown = version if version is not None else ascii_ver
             print(f"格式: {fmt}")
-            print(f"版本: {version if version is not None else '—（非二进制）'}")
+            print(f"版本: {shown if shown is not None else '—'}")
             if fmt == "binary" and version is not None:
                 data = Path(path).read_bytes()
                 start, header_size = probe_layout(data, version)
@@ -79,30 +82,23 @@ def main(argv: list[str]) -> int:
         print_tree(root, max_depth=args.tree)
         return 0
     if args.objects:
-        for oid, node in sorted(collect_objects(root).items()):
-            name = node.properties[1] if len(node.properties) > 1 else "?"
-            print(f"{oid}  {_obj_kind(node)}  {fbx_display_name(name)[:60]}")
+        for oid, node in sorted(collect_objects(root).items(), key=lambda kv: str(kv[0])):
+            print(f"{oid}  {_obj_kind(node)}  {object_display_name(node)[:60]}")
         return 0
     if args.skeleton:
         print_skeleton_tree(root)
         return 0
     if args.geometry is not None:
-        objs = collect_objects(root)
-        g = objs.get(args.geometry)
+        key, g = find_object(collect_objects(root), args.geometry)
         if g is None:
-            print(f"错误: 没有 ID {args.geometry} 的对象", file=sys.stderr)
+            print(f"错误: 没有 ID/名称 {args.geometry} 的对象", file=sys.stderr)
             return 1
-        print(f"对象 {args.geometry}: {g.properties[1] if len(g.properties) > 1 else '?'}")
-        for c in g.children:
-            if c.name in ("Vertices", "PolygonVertexIndex", "LayerElementNormal",
-                          "LayerElementUV", "LayerElementMaterial") and c.properties:
-                v = c.properties[0]
-                print(f"  {c.name}: {'数组 len=' + str(len(v)) if isinstance(v, list) else v}")
+        print_geometry(g, key)
         return 0
 
     s = summarize(root)
     fmt = detect_format(path)
-    version = read_version(path)
+    version = read_version(path) or s.get("fbx_version")
     print(f"文件: {path}")
     print(f"格式: {fmt}" + (f" (版本 {version})" if version else ""))
     kinds = ", ".join(f"{k}×{v}" for k, v in sorted(s["objects"].items())) or "(无)"
@@ -117,9 +113,7 @@ def main(argv: list[str]) -> int:
     if chains:
         print(f"骨架链: {len(chains)} 条（沿每棵树第一子节点；完整树用 --skeleton）")
         for i, chain in enumerate(chains[:5]):
-            print("  " + " -> ".join(
-                fbx_display_name(n.properties[1] if len(n.properties) > 1 else n.name)
-                for n in chain))
+            print("  " + " -> ".join(object_display_name(n) for n in chain))
         if len(chains) > 5:
             print(f"  ... 另有 {len(chains) - 5} 条")
     return 0

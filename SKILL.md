@@ -12,7 +12,7 @@ license: GPL-2.0-or-later
 compatibility: Requires Python 3.9+. FBX write path requires numpy.
 metadata:
   author: MlsMoon
-  version: "1.1"
+  version: "1.2"
 ---
 
 # 3D 模型数据读取（OBJ / FBX）
@@ -29,7 +29,7 @@ metadata:
 | 深度几何（UV 展开/网格运算） | `references/trimesh-fallback.md` | trimesh 对象 |
 
 **脚本统一约定**：`--summary` 摘要（默认）、`--json` 结构化输出（stdout、UTF-8）、失败退出码非 0 且 stderr 给原因、大文件默认只出统计。
-**长度**：单个 `.py` 控制在约 250 行内；再长按职责拆文件。`fbx_reader.py` 只做 CLI / re-export，实现见 `fbx_types.py`、`fbx_binary.py`、`fbx_ascii.py`、`fbx_scene.py`。
+**长度**：单个 `.py` 控制在约 250 行内；再长按职责拆文件。`fbx_reader.py` 只做 CLI / re-export，实现见 `fbx_types.py`、`fbx_binary.py`、`fbx_ascii.py`、`fbx_scene.py`、`fbx_geom.py`。
 
 ## 2. OBJ 格式速查
 
@@ -52,7 +52,7 @@ metadata:
 - **版本号**：二进制文件字节 23-26（little-endian uint32），如 7400 = FBX 7.4、7700 = FBX 7.7。
 - **record 头**：`<7500` 为 13 字节，`>=7500` 为 25 字节；`end_offset` **一律是文件绝对偏移**（不是相对）。Unity 工程里大量第三方 FBX 仍是 7400。
 - **FBXHeaderVersion**：7.4 常见 1003，7.7 常见 1004。锚点必须同时接受二者。
-- **两大集合**：`Objects`（对象定义，按 **ID 关联**）+ `Connections`（`C` 节点，四种连接 OO/OP/PO/PP）。
+- **两大集合**：`Objects` + `Connections`。7.x 按整数 ID 关联，连接节点名是 `C`；**FBX 6.1 ASCII** 无整数 ID，对象写成 `Model: "Model::Name", "Limb"`，连接节点名是 `Connect`，端点是名字不是数字。
 - **节点树**：record 递归嵌套；容器节点（有子节点）与叶子节点（只有属性）不区分语法，`name: 属性...` 结构统一。
 - **二进制 record 头（⚠️ 实测 7.7）**：25 字节 = `end(4, 下一 record 绝对偏移) + rsvd(4) + num(4) + rsvd(4) + plen(4) + rsvd(4) + nlen(1)`；旧版本可能 13/17 字节头，`fbx_reader.py` 自动探测。详见 `references/fbx-binary-format.md`。
 
@@ -76,7 +76,8 @@ for face in obj.faces:
 
 ### FBX Geometry
 
-- `Vertices`：double 数组，每 3 个 = 1 顶点。
+- `Vertices`：double 数组，每 3 个 = 1 顶点。7.x 是 `*N { a: ... }` 单个数组属性；**6.1 常折行成多个标量属性**，续行没有 `Key:`，解析时要接到上一节点。
+- **6.1 网格写在 Mesh Model 上**，不一定有独立 `Geometry` 节点。
 - `PolygonVertexIndex`：int32 数组，**负值 = 面最后一个顶点，按 `~x` 还原**：
 
 ```python
@@ -90,17 +91,17 @@ for x in pvi:
         current.append(x)
 ```
 
-- 法线/UV 在 `LayerElementNormal` / `LayerElementUV`：`MappingInformationType`（`ByVertice`/`ByPolygonVertex`/`ByPolygon`/`AllSame`）+ `ReferenceInformationType`（`Direct`/`IndexToDirect`）决定如何把数组贴到顶点上。
+- 法线/UV 在 `LayerElementNormal` / `LayerElementUV`：`MappingInformationType`（`ByVertice`/`ByPolygonVertex`/`ByPolygon`/`AllSame`）+ `ReferenceInformationType`（`Direct`/`IndexToDirect`）决定如何把数组贴到顶点上。节点自身 `properties[0]` 只是层序号/版本，**真实数组在子节点 `Normals`/`UV`/`UVIndex`**。
 - **单位与轴**：FBX `GlobalSettings.UnitScaleFactor` 默认 1 = 1 cm（Unity 按 0.01 折算米）；原始 FBX 多为 Y-up，Unity 导入后 Z-up 左手系，读取时不要默认世界朝向。
 
 ## 5. 层级结构读取
 
 - **OBJ**：只有 `o`/`g` 归属记录，无节点变换。
-- **FBX 场景树**：`Connections` 的 `OO` 连接 = 父子关系（`C: "OO", 子ID, 父ID`；父 ID = 0 是根）。`Model` 是场景节点，`Null` = 空组节点，`Skeleton`/`LimbNode` = 骨骼。
+- **FBX 场景树**：`OO` 连接 = 父子关系（7.x：`C: "OO", 子ID, 父ID`；6.1：`Connect: "OO", "Model::Child", "Model::Parent"`）。`Model` 是场景节点，`Null` = 空组节点，`Skeleton`/`LimbNode`/`Limb` = 骨骼。
 - **变换**：`Lcl Translation / Rotation / Scaling`（欧拉角、度）。⚠️ 蒙皮绑定矩阵会组合 `PreRotation`/`PostRotation`，**最终矩阵 ≠ 三件套直接相乘**，做绑定矩阵计算时务必带上 Pre/Post（具体分解顺序以实际数据为准）。
 - **骨架**：`Pose`/`BindPose` 的 `PoseNode`（`Node` = Model ID、`Matrix` = 4x4 行主序绑定矩阵，按节点顺序排列）。
 - **骨骼判定**：不要只扫 Model 属性。很多角色 FBX 的骨骼写在 `NodeAttribute.TypeFlags/AttributeType`（`LimbNode`/`Skeleton`），再经 `OO` 挂到 Model。
-- **名称**：二进制对象名常为 `Name\x00\x01Class`，展示时只取 `\x00` 前一段。
+- **名称**：二进制对象名常为 `Name\x00\x01Class`；切掉 Class 后再剥残留 `\x01`。6.1 ASCII 用 `Class::Name`，展示取 `::` 后一段。
 
 ## 6. 使用示例
 
@@ -123,7 +124,7 @@ python scripts/fbx_reader.py model.fbx --skeleton
 
 # FBX 指定对象清单与单 Geometry 详情
 python scripts/fbx_reader.py model.fbx --objects
-python scripts/fbx_reader.py model.fbx --geometry <ID>
+python scripts/fbx_reader.py model.fbx --geometry <ID或名称>
 ```
 
 输出解读示例（`fbx_reader.py model.fbx --summary`）：
@@ -148,7 +149,11 @@ python scripts/fbx_reader.py model.fbx --geometry <ID>
 | 假定 FBX 是 Y-up/米单位 | 读 `GlobalSettings`：`UnitScaleFactor`（默认 cm）、`UpAxis` |
 | 假定 `<7500` 的 `end_offset` 是相对偏移 | Autodesk / Blender encode_bin 一律写**绝对文件偏移**；相对读会让 7400 全失败 |
 | 锚点只认 `FBXHeaderVersion=1004` | 7.4 资产常见 1003；接受 `{1003,1004}` |
-| 只在 Model 属性里找 `LimbNode` | 还要看 `NodeAttribute.TypeFlags` + `OO` 连接 |
+| 只在 Model 属性里找 `LimbNode` | 还要看 `NodeAttribute.TypeFlags` + `OO` 连接；6.1 子类型是 `Limb` |
+| 只认 `C` + 整数 ID | 6.1 是 `Connect` + `Model::Name`；无 ID 时用名字当键 |
+| 只找名为 `Geometry` 的节点 | 6.1 网格常挂在 `Model ..., "Mesh"` 的 `Vertices` 上 |
+| ASCII 折行数字当垃圾丢掉 | 无 `Key:` 的数字续行要接到上一叶子节点 |
+| `--geometry` 打印 LayerElement 的 `properties[0]` | 那是层序号；数组在子节点 `Normals`/`UV` |
 | 用全部 `OO` 当骨骼父节点 | 蒙皮会写 `OO(Bone→Deformer)`，会盖掉 Model 父子；只要 Model↔Model |
 | 把编译产物 `.obj` 当 Wavefront | MSVC/COFF `.obj` 含大量 NUL，应直接拒绝 |
 | 假定二进制 record 头永远是 13 字节 | `>=7500` 实测 25 字节；`<7500` 才是 13 字节；用布局探测兜底 |
