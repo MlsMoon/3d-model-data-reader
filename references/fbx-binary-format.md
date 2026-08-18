@@ -43,7 +43,7 @@ def read_version(path: Path) -> int | None:
 - 文件以 **25 字节全零 null record** 结尾（end=0、num=0、propListLen=0、nameLen=0）。
 - **实测锚点验证**（MH_Grass01.fbx）：root nameLen @51 = 18（name `FBXHeaderExtension` @52-69）；`FBXHeaderVersion` record 头 @70-94（end=116、num=1、plen=5、nameLen=16）、属性 `I`=1004 @112-115；`FBXVersion` record 头 @116-140（end=156）、属性 `I`=7700 @152-155。
 - **未发现独立 CRC 字段**（7100+ CRC 的说法在此版本不成立；rsvd 字段恒 0，语义未知）。
-- 旧版本（13/17 字节头、end 为相对偏移）仍由 `_probe_layout` 候选支持。
+- `<7500` 用 13 字节头，`end_offset` 同样是**绝对文件偏移**（不是相对）。把 13 字节头的 end 当成 `offset+end` 会在 7400 上立刻读飞。
 
 ## 3. 属性类型（1 字节 type code 前缀）
 
@@ -145,8 +145,9 @@ def to_face_vertices(pvi):
 
 **探测流程**：对候选 `root_start ∈ {27, 31}` × `header_size ∈ {13, 17, 25}` 的组合逐一套用（13/17 头解析失败会抛异常，`_try_layout` 捕获后返回 None 继续尝试），用**锚点断言**判定：
 
-- 节点树中必须出现 `FBXHeaderVersion`（属性值 = 1004）
+- 节点树中必须出现 `FBXHeaderVersion`（属性值 ∈ `{1003, 1004}`；7.4 常见 1003，7.7 常见 1004）
 - 必须出现 `FBXVersion`（属性值 = §1 读出的版本号）
+- 实测命中：7400 → `(root_start=27, header_size=13)`；7700 → `(root_start=27, header_size=25)`
 
 命中断言的组合即为正确布局。若未来遇到新版本文件全部候选失败，按 §8 核实清单排查字段布局后回填本文件。
 
@@ -168,8 +169,8 @@ def to_face_vertices(pvi):
 
 - [x] 1. 7500+ 头部：**无 padding** —— `d7 0a 00 00`（@27-30）是 root record 的 end offset（=2775），非 padding
 - [x] 2. CRC 字段：**7.7 实测无独立 CRC**（rsvd 字段恒 0，语义未知，读后丢弃）
-- [x] 3. record 头：**7.7 实测 25 字节**（end4 + rsvd4 + num4 + rsvd4 + plen4 + rsvd4 + nlen1），end = **下一 record 绝对偏移**；13/17 字节经典头保留为候选（end 为相对偏移）
+- [x] 3. record 头：**7.7 实测 25 字节**（end4 + rsvd4 + num4 + rsvd4 + plen4 + rsvd4 + nlen1），end = **下一 record 绝对偏移**；13 字节头用于 `<7500`，end 同样是绝对偏移
 - [x] 4. `S` 字符串与 name：实测**不含结尾 `\0`**（nameLen=18 → name 恰好 18 字节）
 - [x] 5. footer 结构：解析到 null record 即停止，不依赖 footer（未深入，够用）
-- [ ] 6. 多版本样本回归：仅 7.7（MH_Grass01/MH_House01 等）实测；7.0/7.1/7.4 待测（遇到时走 §7 探测流程并回填）
+- [x] 6. 多版本样本回归：7.7（25B 头）与 7.4/7400（13B 头、HeaderVersion=1003）均已实测通过
 - [x] 7. 数组压缩：**实测带标准 zlib 头**（`78 01` 开头），兼容 raw DEFLATE 双路径解压

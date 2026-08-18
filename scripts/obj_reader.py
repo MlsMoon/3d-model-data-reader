@@ -56,6 +56,16 @@ def resolve_index(idx: int, count: int) -> int | None:
 def parse_obj(path: str | Path) -> ObjData:
     """逐行解析 OBJ 文件。未知语句记入 warnings，不中断。"""
     p = Path(path)
+    raw_head = p.read_bytes()[:512]
+    # Windows/MSVC 连接器 .obj（COFF）常被误当成 Wavefront OBJ
+    if b"\x00" in raw_head and not any(
+            raw_head.lstrip().startswith(tag) for tag in (b"v ", b"vt ", b"vn ", b"o ", b"#", b"mtllib")):
+        # 再宽松一点：若前 512 字节几乎无换行且含大量 NUL，判定为二进制
+        if raw_head.count(b"\x00") >= 8:
+            raise ValueError(
+                f"看起来不是 Wavefront OBJ 文本（疑似 COFF/二进制 .obj）: {p}。"
+                f"请使用三维网格的 .obj/.fbx，而不是编译产物 .obj")
+
     data = ObjData(path=p)
     cur_obj, cur_groups, cur_mat, cur_smooth = "", [], None, None
 
@@ -99,6 +109,11 @@ def parse_obj(path: str | Path) -> ObjData:
                 data.mtllib = args[0] if args else None
             elif kw == "s":
                 cur_smooth = args[0] if args else "off"
+            elif kw in ("usemap", "shadow_obj", "trace_obj", "cstype", "deg", "curv", "curv2",
+                        "surf", "parm", "trim", "hole", "scrv", "sp", "end", "con", "vp",
+                        "bevel", "c_interp", "d_interp", "lod", "step"):
+                # Wavefront 扩展 / 曲线曲面语句：本读取器只关心三角网格，静默跳过
+                pass
             elif kw == "f":
                 face = _parse_face(args, data, lineno, cur_obj, cur_groups, cur_mat, cur_smooth)
                 if face is not None:
@@ -231,8 +246,8 @@ def main(argv: list[str]) -> int:
 
     try:
         obj = parse_obj(args.file)
-    except OSError as exc:
-        print(f"错误: 无法读取文件: {exc}", file=sys.stderr)
+    except (OSError, ValueError) as exc:
+        print(f"错误: {exc}", file=sys.stderr)
         return 1
 
     if args.json:

@@ -12,7 +12,7 @@ license: GPL-2.0-or-later
 compatibility: Requires Python 3.9+. FBX write path requires numpy.
 metadata:
   author: MlsMoon
-  version: "1.0"
+  version: "1.1"
 ---
 
 # 3D 模型数据读取（OBJ / FBX）
@@ -29,6 +29,7 @@ metadata:
 | 深度几何（UV 展开/网格运算） | `references/trimesh-fallback.md` | trimesh 对象 |
 
 **脚本统一约定**：`--summary` 摘要（默认）、`--json` 结构化输出（stdout、UTF-8）、失败退出码非 0 且 stderr 给原因、大文件默认只出统计。
+**长度**：单个 `.py` 控制在约 250 行内；再长按职责拆文件。`fbx_reader.py` 只做 CLI / re-export，实现见 `fbx_types.py`、`fbx_binary.py`、`fbx_ascii.py`、`fbx_scene.py`。
 
 ## 2. OBJ 格式速查
 
@@ -48,7 +49,9 @@ metadata:
 ## 3. FBX 结构速查
 
 - **判别格式**：文件头 23 字节 = `Kaydara FBX Binary  \x00\x1a\x00` → 二进制；否则看文本是否含 `FBXHeaderExtension`/`FBXVersion` 关键字 → ASCII；都不是 → 非 FBX。
-- **版本号**：二进制文件字节 23-26（little-endian uint32），如 7700 = FBX 7.7。
+- **版本号**：二进制文件字节 23-26（little-endian uint32），如 7400 = FBX 7.4、7700 = FBX 7.7。
+- **record 头**：`<7500` 为 13 字节，`>=7500` 为 25 字节；`end_offset` **一律是文件绝对偏移**（不是相对）。Unity 工程里大量第三方 FBX 仍是 7400。
+- **FBXHeaderVersion**：7.4 常见 1003，7.7 常见 1004。锚点必须同时接受二者。
 - **两大集合**：`Objects`（对象定义，按 **ID 关联**）+ `Connections`（`C` 节点，四种连接 OO/OP/PO/PP）。
 - **节点树**：record 递归嵌套；容器节点（有子节点）与叶子节点（只有属性）不区分语法，`name: 属性...` 结构统一。
 - **二进制 record 头（⚠️ 实测 7.7）**：25 字节 = `end(4, 下一 record 绝对偏移) + rsvd(4) + num(4) + rsvd(4) + plen(4) + rsvd(4) + nlen(1)`；旧版本可能 13/17 字节头，`fbx_reader.py` 自动探测。详见 `references/fbx-binary-format.md`。
@@ -96,6 +99,8 @@ for x in pvi:
 - **FBX 场景树**：`Connections` 的 `OO` 连接 = 父子关系（`C: "OO", 子ID, 父ID`；父 ID = 0 是根）。`Model` 是场景节点，`Null` = 空组节点，`Skeleton`/`LimbNode` = 骨骼。
 - **变换**：`Lcl Translation / Rotation / Scaling`（欧拉角、度）。⚠️ 蒙皮绑定矩阵会组合 `PreRotation`/`PostRotation`，**最终矩阵 ≠ 三件套直接相乘**，做绑定矩阵计算时务必带上 Pre/Post（具体分解顺序以实际数据为准）。
 - **骨架**：`Pose`/`BindPose` 的 `PoseNode`（`Node` = Model ID、`Matrix` = 4x4 行主序绑定矩阵，按节点顺序排列）。
+- **骨骼判定**：不要只扫 Model 属性。很多角色 FBX 的骨骼写在 `NodeAttribute.TypeFlags/AttributeType`（`LimbNode`/`Skeleton`），再经 `OO` 挂到 Model。
+- **名称**：二进制对象名常为 `Name\x00\x01Class`，展示时只取 `\x00` 前一段。
 
 ## 6. 使用示例
 
@@ -112,7 +117,7 @@ python scripts/obj_reader.py model.obj --remap
 # FBX 摘要（格式/版本/对象统计/几何/包围盒/骨架链/GlobalSettings）
 python scripts/fbx_reader.py model.fbx --summary
 
-# FBX 节点树（前 N 层）与骨架链
+# FBX 节点树（前 N 层）与骨骼森林（忽略 Bone→Deformer 的 OO）
 python scripts/fbx_reader.py model.fbx --tree 5
 python scripts/fbx_reader.py model.fbx --skeleton
 
@@ -141,7 +146,12 @@ python scripts/fbx_reader.py model.fbx --geometry <ID>
 | `PolygonVertexIndex` 负值当索引 | 负值 = 面结束标记，`~x` 还原 |
 | 压缩数组一律 `zlib.decompress(data, -15)` | 先试标准 zlib 头，失败再 `-15` raw（实测 7.7 带 zlib 头） |
 | 假定 FBX 是 Y-up/米单位 | 读 `GlobalSettings`：`UnitScaleFactor`（默认 cm）、`UpAxis` |
-| 假定二进制 record 头是 13 字节 | 实测 7.7 是 25 字节且 end 为绝对偏移；用布局探测兜底 |
+| 假定 `<7500` 的 `end_offset` 是相对偏移 | Autodesk / Blender encode_bin 一律写**绝对文件偏移**；相对读会让 7400 全失败 |
+| 锚点只认 `FBXHeaderVersion=1004` | 7.4 资产常见 1003；接受 `{1003,1004}` |
+| 只在 Model 属性里找 `LimbNode` | 还要看 `NodeAttribute.TypeFlags` + `OO` 连接 |
+| 用全部 `OO` 当骨骼父节点 | 蒙皮会写 `OO(Bone→Deformer)`，会盖掉 Model 父子；只要 Model↔Model |
+| 把编译产物 `.obj` 当 Wavefront | MSVC/COFF `.obj` 含大量 NUL，应直接拒绝 |
+| 假定二进制 record 头永远是 13 字节 | `>=7500` 实测 25 字节；`<7500` 才是 13 字节；用布局探测兜底 |
 | 直接相乘 `T·R·S` 当最终绑定矩阵 | 蒙皮矩阵含 Pre/PostRotation，需核对 Pose/BindPose |
 | 忽略 `--json` | 大文件结构化分析用 `--json` 输出，避免人工数数 |
 
@@ -221,5 +231,5 @@ FBX 导入后把 `lambert1` 映射到工程材质（与源 FBX meta 完全一致
 ### 陷阱
 
 - fbx_reader 布局探测宽容（小数值下 rsvd=0 碰巧可解析），**能解析 ≠ FBX SDK 能导入**
-- `FBXHeaderVersion` 是 1004（不是 1003），锚点断言依赖
+- `FBXHeaderVersion` 写入用 1004；读取必须同时接受 1003（7.4）与 1004（7.7）
 - 拆网格重定中心：顶点整体平移 `-= AABB center`，UV/法线/面索引原样保留（验证：数量 + 抽样值对比源文件）

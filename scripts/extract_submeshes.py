@@ -12,7 +12,7 @@
 --center : 每个子网格顶点整体平移，使 AABB 中心落在原点（默认不平移）。
 命名     : 输出 <output-dir>/<prefix><序号>.fbx（二进制 FBX 7700），
            序号与 --models 列表顺序一致。
-依赖     : 同目录 fbx_reader.py（解析）+ fbx_bin_export.py（二进制序列化）。
+依赖     : 同目录 fbx_reader.py（入口，解析在 fbx_binary/fbx_scene）+ fbx_bin_export.py。
 """
 import argparse
 import sys
