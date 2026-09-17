@@ -7,7 +7,7 @@
 对外 import 保持不变：parse_binary / collect_objects / build_connections。
 
 用法：
-  python fbx_reader.py <file.fbx> [--summary|--json|--tree [N]|--objects|--geometry ID|--skeleton|--info]
+  python fbx_reader.py <file.fbx> [--summary|--json|--tree [N]|--objects|--geometry ID|--uv|--skeleton|--info]
 """
 import argparse
 import json
@@ -17,6 +17,8 @@ from pathlib import Path
 from fbx_ascii import parse_ascii, read_ascii_version
 from fbx_binary import parse_binary, probe_layout, read_version
 from fbx_geom import find_object, print_geometry
+from fbx_uv import collect_uv_islands, print_uv_islands
+from fbx_uv_raster import rasterize_uv_shells
 from fbx_scene import (  # noqa: F401  # re-export for extract_submeshes
     build_connections,
     collect_objects,
@@ -48,6 +50,10 @@ def main(argv: list[str]) -> int:
     ap.add_argument("--tree", type=int, nargs="?", const=8, metavar="N", help="打印节点树（前 N 层）")
     ap.add_argument("--objects", action="store_true", help="列出全部对象 ID/类型/名称")
     ap.add_argument("--geometry", metavar="ID", help="打印指定 Geometry（整数 ID 或名称）")
+    ap.add_argument("--uv", action="store_true", help="打印每网格 UV 岛与 UV/texel 包围盒")
+    ap.add_argument("--uv-size", type=int, metavar="N", help="把 UV 岛换算成 N×N 贴图像素盒")
+    ap.add_argument("--uv-export", metavar="PNG", help="把 UV 壳描边栅格化成透明 PNG（需 Pillow）")
+    ap.add_argument("--uv-stroke", type=int, default=2, metavar="N", help="UV 壳描边像素宽，默认 2")
     ap.add_argument("--skeleton", action="store_true", help="打印骨架链")
     ap.add_argument("--info", action="store_true", help="仅打印头部信息（格式/版本）")
     args = ap.parse_args(argv)
@@ -75,6 +81,31 @@ def main(argv: list[str]) -> int:
         print(f"错误: {exc}", file=sys.stderr)
         return 1
 
+    if args.uv_export:
+        size = args.uv_size if args.uv_size else 2048
+        try:
+            faces = rasterize_uv_shells(
+                root, size, Path(args.uv_export), width=args.uv_stroke)
+        except (OSError, ValueError, RuntimeError) as exc:
+            print(f"错误: {exc}", file=sys.stderr)
+            return 1
+        if args.json:
+            print(json.dumps({
+                "out": str(Path(args.uv_export)),
+                "size": size,
+                "faces": faces,
+                "stroke": args.uv_stroke,
+            }, ensure_ascii=False, indent=2))
+        else:
+            print(f"UV 壳: {faces} 面  {size}x{size}  {args.uv_export}")
+        return 0
+    if args.uv:
+        data = collect_uv_islands(root, texture_size=args.uv_size)
+        if args.json:
+            print(json.dumps(data, ensure_ascii=False, indent=2))
+        else:
+            print_uv_islands(data)
+        return 0
     if args.json:
         print(json.dumps(summarize(root), ensure_ascii=False, indent=2))
         return 0

@@ -1,18 +1,21 @@
 ---
 name: 3d-model-data-reader
 description: >
-  Read and inspect OBJ/FBX mesh data (vertices, normals, UVs, faces,
-  node tree, transforms, skeleton). Parse OBJ, FBX ASCII, and FBX
+  Read and inspect OBJ/FBX mesh data (vertices, normals, UVs, UV islands,
+  faces, node tree, transforms, skeleton). Parse OBJ, FBX ASCII, and FBX
   binary (incl. 25-byte record header / zlib arrays) with stdlib-only
   Python; write Unity-importable binary FBX via Blender encode_bin.
   Use when inspecting 3D model internals, extracting geometry stats,
-  splitting submeshes, or debugging FBX import without a DCC.
-  适用于读取 OBJ/FBX 顶点与层级、核对网格/骨架、拆子网格、排查 Unity 导入。
+  dumping UV islands for texture masks, splitting submeshes, or debugging
+  FBX import. After repeated reader trials, self-iterate official CLI flags
+  instead of leaving ad-hoc Python in chat.
+  适用于读取 OBJ/FBX 顶点与层级、核对网格/骨架、导出 UV 岛、拆子网格、
+  排查 Unity 导入。
 license: GPL-2.0-or-later
 compatibility: Requires Python 3.9+. FBX write path requires numpy.
 metadata:
   author: MlsMoon
-  version: "1.2"
+  version: "1.4"
 ---
 
 # 3D 模型数据读取（OBJ / FBX）
@@ -26,10 +29,26 @@ metadata:
 |------|------|------|
 | 小文件、只看结构 | 直接读文件 + 本 skill 的格式速查 | 人工对照 |
 | 大文件、要统计/提取 | `scripts/obj_reader.py` / `scripts/fbx_reader.py` | 人类可读摘要（默认）或 `--json` |
-| 深度几何（UV 展开/网格运算） | `references/trimesh-fallback.md` | trimesh 对象 |
+| 画遮罩/查 UV 岛 | `scripts/fbx_reader.py --uv` | 每网格岛数、UV 盒，可选 texel 盒 |
+| 导出 UV 壳贴图 | `scripts/fbx_reader.py --uv-export out.png --uv-size N` | 透明 PNG 白描边（需 Pillow） |
+| 深度几何（布尔/采样） | `references/trimesh-fallback.md` | trimesh 对象 |
 
 **脚本统一约定**：`--summary` 摘要（默认）、`--json` 结构化输出（stdout、UTF-8）、失败退出码非 0 且 stderr 给原因、大文件默认只出统计。
-**长度**：单个 `.py` 控制在约 250 行内；再长按职责拆文件。`fbx_reader.py` 只做 CLI / re-export，实现见 `fbx_types.py`、`fbx_binary.py`、`fbx_ascii.py`、`fbx_scene.py`、`fbx_geom.py`。
+**长度**：单个 `.py` 控制在约 250 行内；再长按职责拆文件。`fbx_reader.py` 只做 CLI / re-export，实现见 `fbx_types.py`、`fbx_binary.py`、`fbx_ascii.py`、`fbx_scene.py`、`fbx_geom.py`、`fbx_uv.py`、`fbx_uv_raster.py`。
+
+试错不能只留在对话里。门禁与落点见
+[references/self-iteration.md](references/self-iteration.md)。
+本轮出现以下任一情况，收尾前必须跑升格门禁：
+
+- 执行了 >=3 次 `obj_reader.py` / `fbx_reader.py` / `extract_submeshes.py`
+- 同一旗标族失败或改参后重试 >=2 次
+- 用临时 Python 完成了本可变成一等旗标的能力（例如只靠 albedo 猜遮罩）
+
+同一旗标族连续失败 2 次后，第三次之前必须重读本 skill 或 `--help`，禁止凭记忆再猜。
+过门禁后选唯一落点：正式 CLI 旗标、`references/` 口径、或本 `SKILL.md` 用法。
+授权：门禁通过后可直接回写本 skill 的 `SKILL.md`、`references/` 和 `scripts/`。
+禁止写入宿主工程路径、家具名或业务资产名。
+收尾必须输出「3D 读取自我迭代」四行报告；未触发则写「本轮未触发 3D 读取升格」。
 
 ## 2. OBJ 格式速查
 
@@ -125,6 +144,11 @@ python scripts/fbx_reader.py model.fbx --skeleton
 # FBX 指定对象清单与单 Geometry 详情
 python scripts/fbx_reader.py model.fbx --objects
 python scripts/fbx_reader.py model.fbx --geometry <ID或名称>
+
+# FBX UV 岛（画自发光/遮罩前先看岛，不要只对 albedo 做颜色阈值）
+python scripts/fbx_reader.py model.fbx --uv
+python scripts/fbx_reader.py model.fbx --uv --uv-size 2048 --json
+python scripts/fbx_reader.py model.fbx --uv-export shells.png --uv-size 2048
 ```
 
 输出解读示例（`fbx_reader.py model.fbx --summary`）：
@@ -137,7 +161,7 @@ python scripts/fbx_reader.py model.fbx --geometry <ID或名称>
 设置: UpAxis=1, UnitScaleFactor=1.0
 ```
 
-自带样例：`assets/sample_cube.obj`、`assets/sample_cube.fbx`。
+自带样例：`assets/sample_cube.obj`、`assets/sample_cube.fbx`（含 LayerElementUV，可用 `--uv`）。
 
 ## 7. 常见陷阱
 
@@ -159,6 +183,9 @@ python scripts/fbx_reader.py model.fbx --geometry <ID或名称>
 | 假定二进制 record 头永远是 13 字节 | `>=7500` 实测 25 字节；`<7500` 才是 13 字节；用布局探测兜底 |
 | 直接相乘 `T·R·S` 当最终绑定矩阵 | 蒙皮矩阵含 Pre/PostRotation，需核对 Pose/BindPose |
 | 忽略 `--json` | 大文件结构化分析用 `--json` 输出，避免人工数数 |
+| 只对 albedo 颜色阈值画窗/自发光遮罩 | 先 `--uv` 看独立网格与 UV 岛，再按岛栅格化 |
+| `--geometry` 只看 UV 数组长度就停 | 岛数、UV 盒和 texel 盒用 `--uv` / `--uv-size` |
+| `--uv` 无输出就当解析失败 | 无 UV 层会列出网格并标 `无 LayerElementUV` |
 
 ## 8. 检查清单
 
@@ -167,7 +194,9 @@ python scripts/fbx_reader.py model.fbx --geometry <ID或名称>
 - [ ] 已核对单位与轴（`UnitScaleFactor`、`UpAxis`；OBJ 无约定）
 - [ ] 已确认层级根节点与骨架链（`OO` 连接、`Skeleton`/`LimbNode`、`BindPose`）
 - [ ] 已跑脚本留存结构化输出（`--json`）供后续分析
+- [ ] 画遮罩/自发光前已 `--uv` 核对网格名与 UV 岛，而不是只阈值 albedo
 - [ ] 深度几何需求已评估 trimesh 备用路径（`references/trimesh-fallback.md`）
+- [ ] 收尾已写「3D 读取自我迭代」四行，或写明未触发升格
 
 ## 9. FBX 二进制写入（Blender encode_bin 核心）
 
