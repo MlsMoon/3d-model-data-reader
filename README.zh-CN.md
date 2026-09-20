@@ -6,6 +6,15 @@
 
 本仓库**就是** skill 目录。目录名、GitHub 仓库名、`SKILL.md` 的 `name` 必须都是 `3d-model-data-reader`。
 
+## 源仓库
+
+这是一个独立 Git 仓库。游戏工程用 Plastic SCM 拉下来后，这个目录通常没有 `.git`。
+
+- Git：https://github.com/MlsMoon/3d-model-data-reader
+- 安装 / 更新：[Moon Game Dev Tool Manager](https://github.com/MlsMoon/moon-game-dev-tool-manager)
+
+改 skill 请在上面的 Git 仓库提交并 Push，不要只在某个游戏工程里改完当正式发布。
+
 ## 这是什么
 
 AI 读模型时很容易把 OBJ 索引当成 0-based，或按旧文档把 FBX 二进制 record 头当成 13 字节。本仓库把格式要点、零依赖读取脚本，以及 Unity 能导入的二进制 FBX 写入能力打成一个可安装目录。

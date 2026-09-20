@@ -6,6 +6,15 @@ An [Agent Skill](https://agentskills.io/specification) that teaches AI agents ho
 
 This repository **is** the skill folder. The directory name, GitHub repo name, and `SKILL.md` `name` field must all stay `3d-model-data-reader`.
 
+## Source repository
+
+This folder is its own Git repository. A Plastic SCM pull of a game project usually copies the files and **drops `.git`**.
+
+- Git: https://github.com/MlsMoon/3d-model-data-reader
+- Install / update: [Moon Game Dev Tool Manager](https://github.com/MlsMoon/moon-game-dev-tool-manager)
+
+Commit and push skill changes in that Git repo. Do not treat a copy inside one Unity workspace as the place to publish.
+
 ## What this is
 
 Agents often guess OBJ indices or FBX binary headers and get the mesh wrong. This skill packages the format rules plus two stdlib Python readers and a Blender-compatible binary writer, so an agent can inspect a model without opening Unity, Blender, or another DCC.
